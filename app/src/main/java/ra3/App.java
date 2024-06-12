@@ -8,7 +8,7 @@ import java.util.*;
 import javax.imageio.ImageIO;
 import javax.swing.*;
 import javax.xml.parsers.DocumentBuilderFactory;
-import org.w3c.dom.Element;
+import org.w3c.dom.*;
 
 /// A collage generator that uses the Last.FM API to fetch a user's top albums.
 /// For more info about the API, please read:
@@ -18,7 +18,7 @@ public class App {
     public static void main(String[] args) {
         var frame = new JFrame(TITLE);
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.setMinimumSize(INITIAL_SIZE);
+        frame.setSize(INITIAL_SIZE);
 
         // The panel for user input fields, placed at the top
         var optionsPanel = new JPanel();
@@ -54,101 +54,22 @@ public class App {
 
         generateButton.addActionListener(e -> {
             try {
-                final var API_URL = new URL("http://ws.audioscrobbler.com/2.0");
-
-                // Establish HTTP connection to perform the API request
-                var connection = (HttpURLConnection) API_URL.openConnection();
-                connection.setRequestMethod("GET");
-                connection.setDoOutput(true);
 
                 // Extract user input and map it to the API parameters
-                var period = PERIOD_MAPPING.get((String) periodComboBox.getSelectedItem());
-                var limit = DIMENSION_MAPPING.get((String) dimensionComboBox.getSelectedItem());
-                var collageSize = COLLAGE_SIZE_MAPPING.get((String) collageSizeComboBox.getSelectedItem());
+                var username = usernameTextField.getText();
+                var interfacePeriod = (String) periodComboBox.getSelectedItem();
+                var interfaceDimension = (String) dimensionComboBox.getSelectedItem();
+                var interfaceCollageSize = (String) collageSizeComboBox.getSelectedItem();
 
-                // Build params string and append it to the request
-                var params = buildUrlParameterString(Map.of(
-                        "api_key", API_KEY,
-                        "method", "user.getTopAlbums",
-                        "user", usernameTextField.getText(),
-                        "period", period,
-                        "limit", limit));
-
-                var outStream = new DataOutputStream(connection.getOutputStream());
-                outStream.writeBytes(params);
-
-                // Perform request and check the response status
-                var status = connection.getResponseCode();
-                switch (status) {
-                    // All went well
-                    case 200:
-                        break;
-                    // URL not found - means the user doesn't exist
-                    case 404:
-                        throw new InvalidUser(usernameTextField.getText());
-                    default:
-                        throw new Exception(String.format("Erro no request (%d)", status));
-                }
-
-                // Parse the XML response
-                var document = DocumentBuilderFactory
-                        .newInstance()
-                        .newDocumentBuilder()
-                        .parse(connection.getInputStream());
-
-                // Close the connection already since the ouput has been parsed
-                connection.disconnect();
-
-                // Extract image URLs and encode them into `BufferedImage`s
-                var albumNodes = document.getElementsByTagName("album");
-                if (albumNodes.getLength() == 0)
-                    throw new NoRecentPlays(usernameTextField.getText());
-
-                var images = new ArrayList<BufferedImage>();
-                for (int i = 0; i < albumNodes.getLength(); i++) {
-                    var albumNode = (Element) albumNodes.item(i);
-
-                    // Find the image node with the desired size
-                    var imageNodes = albumNode.getElementsByTagName("image");
-                    for (int j = 0; j < imageNodes.getLength(); j++) {
-                        var imageNode = imageNodes.item(j);
-
-                        if (imageNode.getAttributes().getNamedItem("size").getNodeValue().equals(collageSize)) {
-                            var imageUrl = imageNode.getTextContent();
-                            // Last.FM may not have an image for the requested size/album, just skip it
-                            if (imageUrl.isEmpty())
-                                break;
-
-                            images.add(ImageIO.read(new URL(imageUrl)));
-                            break;
-                        }
-                    }
-                }
+                var period = PERIOD_MAPPING.get(interfacePeriod);
+                var dimension = DIMENSION_MAPPING.get(interfaceDimension);
+                var size = COLLAGE_SIZE_MAPPING.get(interfaceCollageSize);
 
                 // Remove previously rendered collage (if any)
                 collagePanel.removeAll();
 
-                if (images.isEmpty())
-                    throw new NoImagesAvailable(usernameTextField.getText());
-
-                var imageWidth = images.get(0).getWidth();
-                var imageHeight = images.get(0).getHeight();
-
-                // Render images to a single texture on a 2d grid
-                var collageScale = (int) Math.sqrt(Integer.valueOf(limit));
-                var collageWidth = imageWidth * collageScale;
-                var collageHeight = imageHeight * collageScale;
-
-                var collage = new BufferedImage(collageWidth, collageHeight, BufferedImage.TYPE_INT_RGB);
-                var graphics = collage.createGraphics();
-
-                for (int i = 0; i < images.size(); i++) {
-                    var x = (i % collageScale) * imageWidth;
-                    var y = (i / collageScale) * imageHeight;
-                    graphics.drawImage(images.get(i), x, y, null);
-                }
-
-                graphics.dispose();
+                var albumNodes = fetchTopAlbums(username, period, dimension);
+                var collage = generateCollage(albumNodes, Integer.valueOf(dimension), size);
 
                 // Insert the rendered collage
                 collagePanel.add(new JLabel(new ImageIcon(collage)));
@@ -194,6 +115,106 @@ public class App {
         // Center the window on the screen and render it
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
+    }
+
+    private static NodeList fetchTopAlbums(
+            String username,
+            String period,
+            String limit) throws InvalidUser, NoRecentPlays, Exception {
+        final var API_URL = new URL("http://ws.audioscrobbler.com/2.0");
+
+        // Establish HTTP connection to perform the API request
+        var connection = (HttpURLConnection) API_URL.openConnection();
+        connection.setRequestMethod("GET");
+        connection.setDoOutput(true);
+
+        // Build params string and append it to the request
+        var params = buildUrlParameterString(Map.of(
+                "api_key", API_KEY,
+                "method", "user.getTopAlbums",
+                "user", username,
+                "period", period,
+                "limit", limit));
+
+        var outStream = new DataOutputStream(connection.getOutputStream());
+        outStream.writeBytes(params);
+
+        // Perform request and check the response status
+        var status = connection.getResponseCode();
+        switch (status) {
+            // All went well
+            case 200:
+                break;
+            // URL not found - means the user doesn't exist
+            case 404:
+                throw new InvalidUser(username);
+            default:
+                throw new Exception(String.format("Erro no request (%d)", status));
+        }
+
+        // Parse the XML response
+        var document = DocumentBuilderFactory
+                .newInstance()
+                .newDocumentBuilder()
+                .parse(connection.getInputStream());
+
+        // Close the connection already since the ouput has been parsed
+        connection.disconnect();
+
+        // Extract image URLs and encode them into `BufferedImage`s
+        var albumNodes = document.getElementsByTagName("album");
+        if (albumNodes.getLength() == 0)
+            throw new NoRecentPlays(username);
+
+        return albumNodes;
+    }
+
+    private static BufferedImage generateCollage(NodeList albumNodes, int dimension, String collageSize)
+            throws NoImagesAvailable, IOException {
+        var images = new ArrayList<BufferedImage>();
+        for (int i = 0; i < albumNodes.getLength(); i++) {
+            var albumNode = (Element) albumNodes.item(i);
+
+            // Find the image node with the desired size
+            var imageNodes = albumNode.getElementsByTagName("image");
+            for (int j = 0; j < imageNodes.getLength(); j++) {
+                var imageNode = imageNodes.item(j);
+
+                if (imageNode.getAttributes().getNamedItem("size").getNodeValue().equals(collageSize)) {
+                    var imageUrl = imageNode.getTextContent();
+                    // Last.FM may not have an image for the requested size/album, just skip it
+                    if (imageUrl.isEmpty())
+                        break;
+
+                    images.add(ImageIO.read(new URL(imageUrl)));
+                    break;
+                }
+            }
+        }
+
+        if (images.isEmpty())
+            throw new NoImagesAvailable();
+
+        var imageWidth = images.get(0).getWidth();
+        var imageHeight = images.get(0).getHeight();
+
+        // Render images to a single texture on a 2d grid
+        var collageScale = (int) Math.sqrt(dimension);
+        var collageWidth = imageWidth * collageScale;
+        var collageHeight = imageHeight * collageScale;
+
+        var collage = new BufferedImage(collageWidth, collageHeight, BufferedImage.TYPE_INT_RGB);
+        var graphics = collage.createGraphics();
+
+        for (int i = 0; i < images.size(); i++) {
+            var x = (i % collageScale) * imageWidth;
+            var y = (i / collageScale) * imageHeight;
+            graphics.drawImage(images.get(i), x, y, null);
+        }
+
+        graphics.dispose();
+
+        return collage;
     }
 
     private static LinkedHashMap<String, String> buildPeriodMapping() {
