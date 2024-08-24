@@ -89,7 +89,6 @@ public class App {
                 } catch (Exception ex) {
                     System.err.println("Falha ao salvar as propriedades");
                 }
-
             } catch (Exception exception) {
                 JOptionPane.showMessageDialog(
                         frame,
